@@ -1,0 +1,39 @@
+TYPEMAP
+
+struct lxc_container *  T_LXC_CONTAINER
+struct lxc_snapshot *   T_LXC_SNAPSHOT
+struct bdev_specs *     T_PTROBJ
+pid_t                   T_INT64
+int64_t                 T_INT64
+uint64_t                T_UINT64
+freeme_char_pp          T_FREEME_CHAR_PP
+
+
+INPUT
+T_INT64
+        $var = SvI64($arg);
+
+T_UINT64
+        $var = SvU64($arg);
+
+T_LXC_CONTAINER
+        $var = (struct lxc_container *)sv2obj(aTHX_ $arg, \"LXC::Container\", 1);
+
+T_LXC_SNAPSHOT
+        $var = (struct lxc_snapshot *)sv2obj(aTHX_ $arg, \"LXC::Snapshot\", 1);
+
+OUTPUT
+T_INT64
+        $arg = newSVi64($var);
+
+T_UINT64
+        $arg = newSVu64($var);
+
+T_LXC_CONTAINER
+        $arg = obj2sv(aTHX_ $var, \"LXC::Container\");
+
+T_LXC_CONTAINER
+        $arg = obj2sv(aTHX_ $var, \"LXC::Snapshot\");
+
+T_FREEME_CHAR_PP
+        $arg = &PL_sv_undef;
