@@ -6,8 +6,8 @@ struct bdev_specs *     T_PTROBJ
 pid_t                   T_INT64
 int64_t                 T_INT64
 uint64_t                T_UINT64
-freeme_char_pp          T_FREEME_CHAR_PP
-
+freeme_charpp           T_FREEME_CHARPP
+charpp                  T_CHARPP
 
 INPUT
 T_INT64
@@ -17,10 +17,13 @@ T_UINT64
         $var = SvU64($arg);
 
 T_LXC_CONTAINER
-        $var = (struct lxc_container *)sv2obj(aTHX_ $arg, \"LXC::Container\", 1);
+        $var = (struct lxc_container *)sv2obj(aTHX_ $arg, \"LXC::Container\", 1, \"$var\");
 
 T_LXC_SNAPSHOT
-        $var = (struct lxc_snapshot *)sv2obj(aTHX_ $arg, \"LXC::Snapshot\", 1);
+        $var = (struct lxc_snapshot *)sv2obj(aTHX_ $arg, \"LXC::Snapshot\", 1, \"$var\");
+
+T_CHARPP
+        $var = av2charpp(aTHX_ $arg, 0, \"$var\");
 
 OUTPUT
 T_INT64
@@ -35,5 +38,5 @@ T_LXC_CONTAINER
 T_LXC_CONTAINER
         $arg = obj2sv(aTHX_ $var, \"LXC::Snapshot\");
 
-T_FREEME_CHAR_PP
-        $arg = &PL_sv_undef;
+T_FREEME_CHARPP
+        $arg = charpp2sv(aTHX_ $var, -1, FREEME_ALL);
