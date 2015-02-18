@@ -5,15 +5,18 @@ use warnings;
 use feature qw(say);
 
 my $lxccontainer_h = "/usr/include/lxc/lxccontainer.h";
+my $attach_options_h = "/usr/include/lxc/attach_options.h";
 
 open my $h_fh, '<', $lxccontainer_h
     or die "unable to open header file $lxccontainer_h";
+open my $ha_fh, '<', $attach_options_h
+    or die "unable to open header file $attach_options_h";
 
 my $date = `date`;
 chomp $date;
 
-my $h = do { undef $/;
-             <$h_fh> };
+my $h = do { undef $/; <$h_fh> };
+my $ha = do { undef $/; <$ha_fh> };
 
 open my $methods, '>', "methods.h";
 open my $constants, '>', "constants.h";
@@ -29,11 +32,17 @@ for my $fh ($methods, $constants) {
 HEAD
 }
 
-for ($h) {
+my %skip = (ATTACH_OPTIONS_DEFAULT => 1);
+
+for ($h, $ha) {
 
   s{/\*.*?\*/}{}sg; # no comments
 
-  for (/^#define\s*LXC_(\w+)/gm) {
+  for (/^#define\s*LXC_(\w+)/gm,
+       /^\s*LXC_(\w+)/gm) {
+
+      next if $skip{$_}++;
+
       print {$constants} <<EOC;
 static int
 lxc_$_(void) {

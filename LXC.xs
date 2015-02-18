@@ -9,32 +9,44 @@
 #include "perl_math_int64.h"
 
 #include <lxc/lxccontainer.h>
+#include <lxc/attach_options.h>
 #include "methods.h"
 #include "accessors.h"
 #include "constants.h"
 
 #define FREEME_VECTOR 1
 #define FREEME_STRINGS 2
-#define FREEME_ALL (FREEME_VECTOR|FREEME_STRINGS)
+#define FREEME_OBJECTS 4
+#define FREEME_ALL (FREEME_VECTOR|FREEME_STRINGS|FREEME_OBJECTS)
 
 typedef char **freeme_charpp;
 typedef char **charpp;
 
-static void *
-sv2obj(pTHX_ SV *sv, char *klass, int required, char *arg_name) {
+static SV *
+SvRV_safe(pTHX_ SV *sv, int sv_type, char *klass, int required, char *arg_name) {
     if (SvOK(sv)) {
         if (SvROK(sv)) {
-            IV tmp = SvIV((SV*)SvRV(sv));
-            if (sv_isa(sv, klass))
-                return INT2PTR(void *, tmp);
+            if (!klass || (sv_derived_from(sv, klass))) {
+                SV *sv = SvRV(sv);
+                if (!sv_type || (SvTYPE(sv) == sv_type))
+                    return sv;
+                Perl_croak(aTHX_ "object of type %d expected for argument %s, %s found",
+                           sv_type, arg_name, SvTYPE(sv));
+            }
             Perl_croak(aTHX_ "object of class %s expected for argument %s, %s found",
-                       klass, arg_name, sv_refttype(sv, 1));
+                       klass, arg_name, sv_reftype(sv, 1));
         }
-        Perl_croak(aTHX_ "object of class %s expected for argument %s", klass, arg_name);
+        Perl_croak(aTHX_ "object of class %s expected for argument %s, scalar found",
+                   klass, arg_name);
     }
     if (required)
         Perl_croak(aTHX_ "object of class %s expected for argument %s, undef found", klass, arg_name);
     return NULL;
+}
+
+static void *
+sv2obj(pTHX_ SV *sv, char *klass, int required, char *arg_name) {
+    return SvRV_safe(aTHX_ sv, 0, klass, required, arg_name);
 }
 
 static SV*
@@ -48,32 +60,24 @@ obj2sv(pTHX_ void *obj, char *klass) {
 }
 
 static charpp
-av2charpp(pTHX_ SV *sv, int required, char *arg_name) {
-    if (SvOK(sv)) {
-        if (SvROK(sv)) {
-            AV *av = (AV*)SvRV(sv);
-            if (SvTYPE(av) == SVt_PVAV) {
-                SSize_t i, n;
-                char **argp;
-                n = av_len(av) + 1;
-                Newx(argp, n + 1, char *);
-                SAVEFREEPV(argp);
-                for (i = 0; i < n; i++) {
-                    SV *sv, **svp;
-                    svp = av_fetch(av, i, 0);
-                    sv = sv_2mortal(newSVsv(svp ? *svp : &PL_sv_undef));
-                    argp[i] = SvPV_nolen(sv);
-                }
-                argp[n] = 0;
-                return argp;
-            }
+sv2charpp(pTHX_ SV *sv, int required, char *arg_name) {
+    AV *av = (AV*)SvRV_safe(aTHX_ sv, SVt_PVAV, NULL, required, arg_name);
+    if (av) {
+        SSize_t i, n;
+        char **argp;
+        n = av_len(av) + 1;
+        Newx(argp, n + 1, char *);
+        SAVEFREEPV(argp);
+        for (i = 0; i < n; i++) {
+            SV *sv, **svp;
+            svp = av_fetch(av, i, 0);
+            sv = sv_2mortal(newSVsv(svp ? *svp : &PL_sv_undef));
+            argp[i] = SvPV_nolen(sv);
         }
-        Perl_croak(aTHX_ "array reference expected for argument %s", arg_name);
+        argp[n] = 0;
+        return argp;
     }
-    if (required)
-        Perl_croak(aTHX_ "undef is not a valid value for argument %s", arg_name);
-
-    return 0;
+    return NULL;
 }
 
 static SV *
@@ -103,6 +107,84 @@ objp2sv(pTHX_ void **objp, SSize_t n, char *klass, int freeme) {
     }
     if (objp && (freeme & FREEME_VECTOR)) free(objp);
     return newRV_inc((SV *)av);
+}
+
+static SV *
+lxc_snapshot2sv(pTHX_ struct lxc_snapshot *ss) {
+    HV *hv = (HV*)sv_2mortal((SV*)newHV());
+    hv_stores(hv, "name", newSVpv(ss->name, 0));
+    hv_stores(hv, "comment_pathname", newSVpv(ss->comment_pathname, 0));
+    hv_stores(hv, "timestamp", newSVpv(ss->timestamp, 0));
+    hv_stores(hv, "lxcpath", newSVpv(ss->lxcpath, 0));
+    return sv_bless(newRV_inc((SV*)hv), gv_stashpv("LXC::Snapshot", GV_ADD));
+}
+
+static SV *
+lxc_snapshotv2sv(pTHX_ struct lxc_snapshot *ssv, SSize_t n, int freeme) {
+    SSize_t i;
+    AV *av = (AV*)sv_2mortal((SV*)newAV());
+    for (i = 0; i < n; i++) {
+        struct lxc_snapshot *ss = ssv + i;
+        av_push(av, lxc_snapshot2sv(aTHX_ ss));
+        if (freeme & FREEME_OBJECTS)
+            (ss->free)(ss);
+    }
+    if (freeme & FREEME_VECTOR)
+        free(ssv);
+    return newRV_inc((SV*)av);
+}
+
+static SV *
+pid_t2sv(pTHX_ pid_t pid) {
+    return ((sizeof(pid_t) > sizeof(IV))
+            ? newSVi64(pid)
+            : newSViv(pid));
+}
+
+static SV *
+hv_fetchs_safe(pTHX_ HV *hv, char *pv) {
+    SV **svp = hv_fetch(hv, pv, strlen(pv), 0);
+    return (svp ? *svp : &PL_sv_undef);
+}
+
+static IV
+hv_fetchs_iv(pTHX_ HV *hv, char *pv, IV def) {
+    SV *sv = hv_fetchs_safe(aTHX_ hv, pv);
+    return (SvOK(sv) ? SvIV(sv) : def);
+}
+
+static char *
+hv_fetchs_pv(pTHX_ HV *hv, char *pv) {
+    SV *sv = hv_fetchs_safe(aTHX_ hv, pv);
+    return (SvOK(sv) ? SvPV_nolen(sv_mortalcopy(sv)) : NULL);
+}
+
+static lxc_attach_options_t *
+sv2lxc_attach_options_t(pTHX_ SV *sv, int required, char *arg_name) {
+    HV *hv = (HV*)SvRV_safe(aTHX_ sv, SVt_PVHV, NULL, required, arg_name);
+    if (hv) {
+        lxc_attach_options_t *ao;
+        Newxz(ao, 1, lxc_attach_options_t);
+        SAVEFREEPV(ao);
+        ao->attach_flags = hv_fetchs_iv(aTHX_ hv, "attach_flags", LXC_ATTACH_DEFAULT);
+        ao->namespaces   = hv_fetchs_iv(aTHX_ hv, "namespaces", -1);
+        ao->personality  = hv_fetchs_iv(aTHX_ hv, "personality", -1);
+        ao->initial_cwd  = hv_fetchs_pv(aTHX_ hv, "initial_cwd");
+        ao->uid          = hv_fetchs_iv(aTHX_ hv, "uid", -1);
+        ao->gid          = hv_fetchs_iv(aTHX_ hv, "gid", -1);
+        ao->env_policy   = hv_fetchs_iv(aTHX_ hv, "env_policy", LXC_ATTACH_KEEP_ENV);
+        /* FIXME: add support for extra_env_vars and extra_keep_env */
+        ao->stdin_fd     = hv_fetchs_iv(aTHX_ hv, "stdin_fd", 0);
+        ao->stdout_fd    = hv_fetchs_iv(aTHX_ hv, "stdout_fd", 1);
+        ao->stderr_fd    = hv_fetchs_iv(aTHX_ hv, "stderr_fd", 2);
+        return ao;
+    }
+    return NULL;
+}
+
+static void
+call_cv(void *ptr) {
+    return;
 }
 
 MODULE = LXC    PACKAGE = LXC::C   PREFIX = lxc_
@@ -417,15 +499,23 @@ lxc_container_console(self, ttynum, stdinfd, stdoutfd, stderrfd, escape)
     int stderrfd
     int escape
 
-=for dev_null
-int
-lxc_container_attach(self, exec_function, exec_payload, options, attached_process)
+SV *
+lxc_container_attach(self, callback, options)
     struct lxc_container *self
-    lxc_attach_exec_t exec_function
-    void *exec_payload
+    CV *callback
     lxc_attach_options_t *options
-    pid_t *attached_process
-=cut
+PREINIT:
+    int r;
+    pid_t pid;
+CODE:
+    r = lxc_container_attach(self, &call_cv, cv, options, &pid);
+    if (r < 0)
+        RETVAL = &PL_sv_undef;
+    else
+        RETVAL = pid_t2sv(aTHX_ pid);
+OUTPUT:
+    RETVAL
+
 
 =for dev_null
 int
@@ -440,12 +530,17 @@ lxc_container_snapshot(self, commentfile)
     struct lxc_container *self
     const char *commentfile
 
-=for dev_null
-int
-lxc_container_snapshot_list(self, snapshots)
+SV *
+lxc_container_snapshot_list(self)
     struct lxc_container *self
-    struct lxc_snapshot **snapshots
-=cut
+PREINIT:
+    SSize_t n;
+    struct lxc_snapshot *ssv;
+CODE:
+    n = lxc_container_snaphost_list(self, &ssv);
+    RETVAL = lxc_snapshotv2sv(aTHX_ ssv, n, FREEME_ALL);
+OUTPUT:
+    RETVAL
 
 bool
 lxc_container_snapshot_restore(self, snapname, newname)
@@ -500,22 +595,3 @@ lxc_container_get(struct lxc_container *c)
 int
 lxc_container_put(struct lxc_container *c)
 
-char *
-lxc_snapshot_get_name(self)
-    struct lxc_snapshot *self
-
-char *
-lxc_snapshot_get_comment_pathname(self)
-    struct lxc_snapshot *self
-
-char *
-lxc_snapshot_get_timestamp(self)
-    struct lxc_snapshot *self
-
-char *
-lxc_snapshot_get_lxcpath(self)
-    struct lxc_snapshot *self
-
-void
-lxc_snapshot_free(self)
-    struct lxc_snapshot *self

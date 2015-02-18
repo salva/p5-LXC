@@ -1,9 +1,9 @@
 TYPEMAP
 
 struct lxc_container *  T_LXC_CONTAINER
-struct lxc_snapshot *   T_LXC_SNAPSHOT
 struct bdev_specs *     T_PTROBJ
-pid_t                   T_INT64
+lxc_attach_options_t *  T_LXC_ATTACH_OPTIONS
+pid_t                   T_PID
 int64_t                 T_INT64
 uint64_t                T_UINT64
 freeme_charpp           T_FREEME_CHARPP
@@ -23,7 +23,10 @@ T_LXC_SNAPSHOT
         $var = (struct lxc_snapshot *)sv2obj(aTHX_ $arg, \"LXC::Snapshot\", 1, \"$var\");
 
 T_CHARPP
-        $var = av2charpp(aTHX_ $arg, 0, \"$var\");
+        $var = sv2charpp(aTHX_ $arg, 0, \"$var\");
+
+T_LXC_ATTACH_OPTIONS
+        $var = sv2lxc_attach_options_t(aTHX_ $arg, 1, \"$var\");
 
 OUTPUT
 T_INT64
@@ -35,8 +38,8 @@ T_UINT64
 T_LXC_CONTAINER
         $arg = obj2sv(aTHX_ $var, \"LXC::Container\");
 
-T_LXC_CONTAINER
-        $arg = obj2sv(aTHX_ $var, \"LXC::Snapshot\");
-
 T_FREEME_CHARPP
         $arg = charpp2sv(aTHX_ $var, -1, FREEME_ALL);
+
+T_PID
+        $arg = pid_t2sv(aTHX_ $var);
